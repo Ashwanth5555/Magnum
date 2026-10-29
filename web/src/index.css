@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+/* Uber Eats-inspired, not Uber. Green accent, near-black type, white cards,
+   generous rounding. No Uber marks, wordmarks or trade dress are used. */
+@theme {
+  --color-brand-50:  #e9faf1;
+  --color-brand-100: #c9f2dd;
+  --color-brand-200: #93e5bc;
+  --color-brand-400: #2ecc7d;
+  --color-brand-500: #06c167;
+  --color-brand-600: #049e54;
+  --color-brand-700: #037a41;
+
+  --color-ink-900: #0b0b0b;
+  --color-ink-700: #2f2f2f;
+  --color-ink-500: #6b6b6b;
+  --color-ink-300: #b3b3b3;
+  --color-ink-100: #eeeeee;
+  --color-ink-50:  #f6f6f6;
+
+  --color-warn-500: #d97706;
+  --color-warn-50:  #fef3c7;
+  --color-risk-500: #dc2626;
+  --color-risk-50:  #fee2e2;
+  --color-cool-500: #2563eb;
+  --color-cool-50:  #dbeafe;
+
+  --font-sans: "Uber Move Text", ui-sans-serif, system-ui, -apple-system,
+               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: #ffffff;
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Flavour tiles: built from gradients so the build stays self-contained -
+   no external image host, no borrowed product photography. */
+.tile { position: relative; overflow: hidden; }
+.tile::after {
+  /* The gloss is decoration. Without pointer-events:none it paints after the
+     tile's children and eats every click on the add button underneath it. */
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(120% 80% at 30% 0%, rgba(255,255,255,.45), transparent 60%);
+}
+.tile-classic  { background: linear-gradient(150deg,#6b4326 0%,#3d2415 55%,#241209 100%); }
+.tile-almond   { background: linear-gradient(150deg,#8a5a2b 0%,#59341a 55%,#31190b 100%); }
+.tile-caramel  { background: linear-gradient(150deg,#c98a3a 0%,#8a5220 55%,#4a2a0e 100%); }
+.tile-white    { background: linear-gradient(150deg,#f3e7d3 0%,#dcc39a 55%,#b99a69 100%); }
+.tile-meal     { background: linear-gradient(150deg,#e8a33d 0%,#c2661f 100%); }
+.tile-drink    { background: linear-gradient(150deg,#4a90d9 0%,#20518f 100%); }
+.tile-side     { background: linear-gradient(150deg,#e0b64a 0%,#a9762a 100%); }
+.tile-dessert  { background: linear-gradient(150deg,#d98cb0 0%,#8d4568 100%); }
+.tile-grocery  { background: linear-gradient(150deg,#7fb069 0%,#41692f 100%); }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .28s ease-out both; }
+
+/* The latency chip re-keys on every recomputation, so this fires once per
+   real recompute and never on an idle re-render. */
+@keyframes pulse-once {
+  0%   { transform: scale(1);    box-shadow: 0 0 0 0 rgba(6, 193, 103, .55); }
+  40%  { transform: scale(1.06); box-shadow: 0 0 0 6px rgba(6, 193, 103, 0); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(6, 193, 103, 0); }
+}
+.pulse { animation: pulse-once .6s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise, .pulse { animation: none; }
+}

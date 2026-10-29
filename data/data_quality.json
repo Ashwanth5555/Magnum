@@ -1,0 +1,139 @@
+{
+  "generator_version": "gen-v1.0.0",
+  "policy_version": "policy-v1.0.0",
+  "seed": 20260901,
+  "market": {
+    "region": "NY / CT metro",
+    "states": [
+      "NY",
+      "CT"
+    ],
+    "currency": "USD",
+    "temperature_unit": "F"
+  },
+  "window": {
+    "start": "2025-12-02T00:00:00",
+    "end": "2026-09-01T00:00:00",
+    "weeks": 39,
+    "days": 273,
+    "hours": 6552
+  },
+  "row_counts": {
+    "customers": 5000,
+    "stores": 10,
+    "products": 28,
+    "contexts": 65520,
+    "sessions": 239926,
+    "orders": 88255,
+    "order_items": 219329,
+    "inventory": 524160,
+    "offers": 118313,
+    "notifications": 5000,
+    "forecasts": 153600,
+    "events": 655113,
+    "ground_truth": 118313
+  },
+  "funnel": {
+    "session_to_order_rate": 0.3678,
+    "magnum_attach_rate": 0.2864,
+    "attach_rate_meal_led": 0.1564,
+    "attach_rate_dessert_led": 0.631,
+    "avg_order_total": 34.78,
+    "avg_lines_per_order": 2.49,
+    "substitution_rate": 0.0254,
+    "instrumented_session_share": 0.3492
+  },
+  "randomisation": {
+    "arm_share": {
+      "multipack_value": 0.2008,
+      "reminder": 0.2,
+      "flavour_discovery": 0.1999,
+      "voucher20": 0.1998,
+      "none": 0.1995
+    },
+    "suppression_rate": 0.1095,
+    "mean_decision_reward_by_arm": {
+      "flavour_discovery": 0.6607,
+      "multipack_value": 0.6285,
+      "none": 0.6281,
+      "reminder": 0.6719,
+      "voucher20": 0.4138
+    },
+    "observed_uplift_pp": {
+      "flavour_discovery": 2.027,
+      "multipack_value": 3.41,
+      "none": 0.0,
+      "reminder": 1.91,
+      "voucher20": 5.075
+    },
+    "true_uplift_pp": {
+      "flavour_discovery": 1.482,
+      "multipack_value": 3.341,
+      "none": 0.0,
+      "reminder": 1.909,
+      "voucher20": 5.495
+    }
+  },
+  "inventory": {
+    "stockout_hour_share": 0.0112,
+    "avg_on_hand_final": 8.64,
+    "total_waste_units": 16081
+  },
+  "splits": {
+    "fit": 139563,
+    "holdout": 51965,
+    "calibrate": 48398
+  },
+  "checks": [
+    {
+      "check": "no null customer on a session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check": "every order maps to a session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check": "every order item maps to an order",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check": "on-hand never negative",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check": "voucher arm has the largest true uplift",
+      "pass": true,
+      "detail": "voucher 5.49 pp"
+    },
+    {
+      "check": "decision log carries no ground-truth column",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "check": "observed and true uplift agree within 1.5pp for the voucher arm",
+      "pass": true,
+      "detail": "observed 5.08 vs true 5.49"
+    },
+    {
+      "check": "hot hours attach more than cold hours",
+      "pass": true,
+      "detail": "31.8% hot vs 12.9% cold"
+    },
+    {
+      "check": "stockouts occur but stay under 12% of store-SKU-hours",
+      "pass": true,
+      "detail": "1.12%"
+    },
+    {
+      "check": "no ground-truth column leaks into an application table",
+      "pass": true,
+      "detail": ""
+    }
+  ]
+}

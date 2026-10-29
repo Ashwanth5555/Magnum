@@ -1,0 +1,24 @@
+# Dependencies and local environments
+node_modules/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Generated builds, caches and operating system files
+web/dist/
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+*.log
+
+# Reproducible simulation data (generate locally instead of committing)
+data/*.db
+data/*.db-*
+data/*.csv
+
+# Local deployment archives
+*.zip
