@@ -79,13 +79,14 @@ export default function Impact() {
     err: [h.total_margin - h.total_margin_low, h.total_margin_high - h.total_margin],
   }))
 
-  // Real windows of the log, so the axis says "last". The targeting bar carries
-  // its 95% whisker: the lift is measured on a holdout, and the low end is the
-  // number to quote if anyone asks for the cautious case.
+  // Read forward: what the first month, and the next 3 and 6 months, of running
+  // this add up to - each estimated from the same span of the log just gone. The
+  // targeting bar carries its 95% whisker: the lift is measured on a holdout,
+  // and the low end is the number to quote if anyone asks for the cautious case.
   const orders = d.horizons.map((h: any) => {
     const r = row(h, 'do_nothing')
     return {
-      label: h.days <= 31 ? 'Last month' : `Last ${h.label}`,
+      label: h.days <= 31 ? 'First month' : `Next ${h.label}`,
       extra: r.extra_magnum_orders,
       lo: r.extra_magnum_orders_low,
       hi: r.extra_magnum_orders_high,
@@ -100,16 +101,25 @@ export default function Impact() {
   // at a time. Trailing 1/3/6-month windows all end in summer, so the longer
   // ones read lower; consecutive quarters are what show the rate actually
   // moving - it climbs with the weather, winter to spring to summer.
-  const SEASON = ['Winter', 'Spring', 'Summer', 'Autumn']
+  // Each bar is the first 1, 3 or 6 months of the log counted from its start, as
+  // if the system went live then, so the bar holds exactly the span its label
+  // names and the calendar months sit beneath it. Read that way the share bought
+  // climbs as the run moves out of winter.
+  const SPANS = [
+    { months: 1, name: 'First month' },
+    { months: 3, name: 'Next 3 months' },
+    { months: 6, name: 'Next 6 months' },
+  ].filter((s) => s.months <= d.monthly.length)
   const mon = (m: string) => new Date(`${m}-01T00:00:00Z`)
     .toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })
-  const funnel = Array.from({ length: Math.floor(d.monthly.length / 3) }, (_, q) => {
-    const ms = d.monthly.slice(q * 3, q * 3 + 3)
+  const funnel = SPANS.map((s) => {
+    const ms = d.monthly.slice(0, s.months)
     const sum = (k: string) => ms.reduce((a: number, m: any) => a + m[k], 0)
     const shown = sum('shown'), converted = sum('converted')
+    const first = mon(ms[0].month), last = mon(ms[ms.length - 1].month)
     return {
-      label: `${mon(ms[0].month)}–${mon(ms[2].month)}`,
-      season: SEASON[q] ?? '',
+      label: first === last ? first : `${first}–${last}`,
+      season: s.name,
       shown, converted,
       discounted: sum('discounted'),
       full_price: sum('full_price'),
@@ -179,21 +189,13 @@ export default function Impact() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Chart
           title="Shown, and what came back"
-          note={`Every store combined, by season — three months per bar. The whole bar is what we showed; the solid part at the bottom is what was bought out of it, split by whether the basket needed a coupon to close. The share bought climbs with the weather: ${(firstQ.rate * 100).toFixed(1)}% in ${firstQ.season.toLowerCase()} to ${(lastQ.rate * 100).toFixed(1)}% in ${lastQ.season.toLowerCase()}.`}
+          note={`Every store combined, counted from the start of the log as if the system went live then: the first month, then the first 3 and 6 months in total. The whole bar is what we showed; the solid part at the bottom is what was bought out of it, split by whether the basket needed a coupon to close. The share bought climbs as the run moves out of winter: ${(firstQ.rate * 100).toFixed(1)}% in the first month (${firstQ.label}) to ${(lastQ.rate * 100).toFixed(1)}% over six (${lastQ.label}).`}
         >
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={funnel} margin={{ top: 34, right: 8, bottom: 0, left: -6 }}>
               <CartesianGrid stroke="#eee" vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} interval={0} height={34}
-                     tick={(p: any) => {
-                       const f = funnel[p.index]
-                       return (
-                         <text x={p.x} y={p.y + 10} textAnchor="middle" style={AXIS}>
-                           <tspan x={p.x} style={{ fontWeight: 700, fill: '#2f2f2f' }}>{f?.season}</tspan>
-                           <tspan x={p.x} dy={13}>{f?.label}</tspan>
-                         </text>
-                       )
-                     }} />
+              <XAxis dataKey="season" tickLine={false} axisLine={false} interval={0}
+                     tick={{ ...AXIS, fontWeight: 700, fill: '#2f2f2f' }} />
               <YAxis tick={AXIS} tickLine={false} axisLine={false} tickFormatter={compact} />
               <Tooltip contentStyle={TIP} formatter={(v: any, n: any) => [count(Number(v)), n]} />
               <Legend wrapperStyle={{ fontSize: 11 }}
@@ -237,7 +239,7 @@ export default function Impact() {
 
         <Chart
           title="Extra Magnum orders"
-          note={`Orders that would not have happened without the system, over the real last 1, 3 and 6 months. Targeting lifts Magnum buying by ${d.comparisons.find((c: any) => c.key === 'do_nothing')?.attach_delta_pp.toFixed(1)} points against doing nothing; the whisker is its 95% range. Of the ${count(orders[2].substituted)} orders over six months that got a substitute, only ${Math.round(subSave * 100)}% are counted as saved — the rest would have picked another flavour anyway.`}
+          note={`Orders that would not have happened without the system — what the first month and the next 3 and 6 months add up to, each estimated from the last 1, 3 and 6 months of orders. Targeting lifts Magnum buying by ${d.comparisons.find((c: any) => c.key === 'do_nothing')?.attach_delta_pp.toFixed(1)} points against doing nothing; the whisker is its 95% range. Of the ${count(orders[2].substituted)} orders over six months that got a substitute, only ${Math.round(subSave * 100)}% are counted as saved — the rest would have picked another flavour anyway.`}
         >
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={orders} margin={{ top: 22, right: 8, bottom: 0, left: -6 }}>
