@@ -1037,9 +1037,10 @@ def demo_reset():
 # ---------------------------------------------------------------------------
 @app.get("/api/impact")
 def api_impact(recovery: float = Query(impact.DEFAULT_RECOVERY, ge=0.0, le=1.0),
-               scale: float = Query(1.0, ge=0.1, le=200.0)):
+               scale: float = Query(1.0, ge=0.1, le=200.0),
+               sub_save: float = Query(impact.DEFAULT_SUB_SAVE, ge=0.0, le=1.0)):
     """What a month, a quarter and half a year of running this add up to."""
-    return impact.compute(recovery=recovery, scale=scale)
+    return impact.compute(recovery=recovery, scale=scale, sub_save=sub_save)
 
 
 @app.get("/api/analysis/overview")

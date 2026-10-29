@@ -143,10 +143,14 @@ export default function App() {
         </div>
       </header>
 
-      <ScenarioBar sel={sel} setSel={setSel} ctx={ctx} options={options} onReset={resetDemo}
-                   profiles={profiles} customerId={customerId} setCustomerId={setCustomerId} />
+      {/* Impact is read off the whole log and takes no scenario, so the store,
+          weather, hour and shopper controls would be dials wired to nothing there. */}
+      {tab !== 'impact' && (
+        <ScenarioBar sel={sel} setSel={setSel} ctx={ctx} options={options} onReset={resetDemo}
+                     profiles={profiles} customerId={customerId} setCustomerId={setCustomerId} />
+      )}
 
-      {feed.length > 0 && (
+      {tab !== 'impact' && feed.length > 0 && (
         <div className="mx-auto max-w-[1500px] px-5 pt-3">
           <ChangeFeed feed={feed} />
         </div>

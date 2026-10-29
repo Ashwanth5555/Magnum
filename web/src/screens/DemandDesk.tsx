@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, LabelList, Legend, Line,
   ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { Truck, Thermometer, Trophy, Clock, PackageCheck } from 'lucide-react'
+import { Truck, Thermometer, Trophy, Clock, PackageCheck, X } from 'lucide-react'
 import { get, qs } from '../lib/api'
 import { Ctx, ContextSel, StockAction } from '../lib/types'
 import { deg, hourLabel, num, statusTone } from '../lib/format'
@@ -47,6 +47,39 @@ const C_STOCK = '#2563eb'
 const C_DEMAND = '#049e54'
 const C_SHORT = '#dc2626'
 
+/* The recharts legend takes one swatch per <Bar>, so the red that a <Cell>
+   paints on a short demand column never appeared in it, and a top-aligned
+   legend sat on the tallest bar's value label. This one names all three colours
+   and lives outside the plot area. Each entry is also a toggle: clicking one
+   keeps those columns at full strength and fades the other two, so "where is
+   the shelf short" can be read without comparing pairs. */
+type Series = 'stock' | 'covered' | 'short'
+
+function StockLegend({ shortLabel, active, onToggle }: {
+  shortLabel: string; active: Series | null; onToggle: (s: Series) => void
+}) {
+  const item = (key: Series, color: string, label: string) => (
+    <button type="button" onClick={() => onToggle(key)} aria-pressed={active === key}
+            className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 transition ${
+              active === key ? 'bg-ink-50 font-semibold text-ink-900 ring-1 ring-ink-300'
+                : active ? 'opacity-40 hover:opacity-70' : 'hover:bg-ink-50'
+            }`}>
+      <span className="h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
+      {label}
+    </button>
+  )
+  return (
+    <div className="mb-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-ink-700">
+      {item('stock', C_STOCK, 'Stock on the shelf now')}
+      {item('covered', C_DEMAND, 'Demand to the peak — covered')}
+      {item('short', C_SHORT, shortLabel)}
+    </div>
+  )
+}
+
+/** Full strength when nothing is highlighted or this series is; faded otherwise. */
+const seriesOpacity = (active: Series | null, s: Series) => (!active || active === s ? 1 : 0.2)
+
 export default function DemandDesk({
   sel, ctx,
 }: { sel: ContextSel; ctx: Ctx | null }) {
@@ -54,6 +87,15 @@ export default function DemandDesk({
   const [store, setStore] = useState<string | null>(null)
   const [detail, setDetail] = useState<any>(null)
   const [showMath, setShowMath] = useState(false)
+  // A SKU picked from the stock chart narrows the 48-hour chart to that SKU.
+  // Kept across store changes, so the same product can be compared store to store.
+  const [focusSku, setFocusSku] = useState<string | null>(null)
+  const forecastRef = useRef<HTMLDivElement>(null)
+  // Legend highlights, one per chart; clicking the active entry clears it.
+  const [skuSeries, setSkuSeries] = useState<Series | null>(null)
+  const [netSeries, setNetSeries] = useState<Series | null>(null)
+  const toggle = (set: (f: (c: Series | null) => Series | null) => void) =>
+    (s: Series) => set((c) => (c === s ? null : s))
   const [error, setError] = useState<unknown>(null)
 
   const params = {
@@ -92,8 +134,22 @@ export default function DemandDesk({
       if (meta) row[meta.flavour] += hours[i]?.p50 ?? 0
     }
     for (const f of FLAVOURS) row[f.key] = Number(row[f.key].toFixed(2))
+    const fh = focusSku ? detail.by_sku[focusSku]?.[i] : null
+    if (fh) {
+      row.sku_p50 = fh.p50
+      row.sku_band = [fh.p10, fh.p90]
+    }
     return row
   })
+  const focusMeta = focusSku ? SKU_META[focusSku] : null
+  const focusColour = FLAVOURS.find((f) => f.key === focusMeta?.flavour)?.colour ?? C_DEMAND
+
+  // Clicking the same SKU again clears it. Picking one scrolls the forecast into
+  // view, because the chart that changes sits above the one that was clicked.
+  const pickSku = (sku: string) => {
+    setFocusSku((cur) => (cur === sku ? null : sku))
+    forecastRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
   const peak = detail.peak
   const peakLabel = `${peak.day} ${hourLabel(peak.hour)}`
   const risk = network.stores.filter((s: any) => s.risk_skus > 0)
@@ -135,16 +191,27 @@ export default function DemandDesk({
         <Stat label="Demand index" value={`×${ctx?.demand_index.toFixed(2)}`} tone="brand" hint="vs the same hour, ordinary conditions" />
       </div>
 
+      <div ref={forecastRef} className="scroll-mt-20">
       <Section
-        title="Next 48 hours, by flavour"
-        subtitle={`${detail.store.name} · p50 units an hour for each Magnum flavour, from the shared context model. Every driver on the scenario bar moves these curves, and the mix underneath them is fitted per store — change the store and the flavours re-rank.`}
+        title={focusMeta ? `Next 48 hours — ${focusMeta.short}` : 'Next 48 hours, by flavour'}
+        subtitle={focusMeta
+          ? `${detail.store.name} · p50 units an hour for ${focusMeta.short} alone, with the shaded band running from p10 to p90 — the range the hour will most likely land in. Change the store to see the same product elsewhere.`
+          : `${detail.store.name} · p50 units an hour for each Magnum flavour, from the shared context model. Every driver on the scenario bar moves these curves, and the mix underneath them is fitted per store — change the store and the flavours re-rank. Click a product in the chart below to see its own 48 hours.`}
         right={
-          <select value={store ?? ''} onChange={(e) => setStore(e.target.value)}
-                  className="h-9 rounded-xl border border-ink-100 px-2.5 text-[13px] font-semibold outline-none hover:border-ink-300">
-            {network.stores.map((s: any) => (
-              <option key={s.store_id} value={s.store_id}>{s.name} — {s.state}</option>
-            ))}
-          </select>
+          <div className="flex flex-wrap items-center gap-2">
+            {focusMeta && (
+              <button onClick={() => setFocusSku(null)}
+                      className="flex h-9 items-center gap-1.5 rounded-xl border border-ink-100 px-3 text-[12px] font-semibold text-ink-600 outline-none hover:border-ink-300">
+                <X className="h-3.5 w-3.5" /> Show all flavours
+              </button>
+            )}
+            <select value={store ?? ''} onChange={(e) => setStore(e.target.value)}
+                    className="h-9 rounded-xl border border-ink-100 px-2.5 text-[13px] font-semibold outline-none hover:border-ink-300">
+              {network.stores.map((s: any) => (
+                <option key={s.store_id} value={s.store_id}>{s.name} — {s.state}</option>
+              ))}
+            </select>
+          </div>
         }
       >
         <Card className="p-4">
@@ -155,7 +222,10 @@ export default function DemandDesk({
               <YAxis tick={AXIS} tickLine={false} axisLine={false} />
               <Tooltip
                 contentStyle={TIP}
-                formatter={(v: any, n: any) => [n === '°F' ? deg(Number(v)) : `${Number(v).toFixed(2)} units/h`, n]}
+                formatter={(v: any, n: any) => [
+                  n === '°F' ? deg(Number(v))
+                    : Array.isArray(v) ? `${Number(v[0]).toFixed(1)}–${Number(v[1]).toFixed(1)} units/h`
+                    : `${Number(v).toFixed(2)} units/h`, n]}
                 labelFormatter={(l, p: any) => {
                   const d = p?.[0]?.payload
                   return d ? `${d.day} ${hourLabel(d.hour)} · ${deg(d.temperature_f)}` : l
@@ -174,7 +244,13 @@ export default function DemandDesk({
                   flavour is - is the thing that disappears. Stacked, the top
                   edge is total demand and each band's thickness is that
                   flavour's share, which is what actually moves between stores. */}
-              {FLAVOURS.map((f) => (
+              {focusMeta ? [
+                <Area key="band" isAnimationActive={false} type="monotone" dataKey="sku_band"
+                      stroke="none" fill={focusColour} fillOpacity={0.18} name="p10–p90 range" />,
+                <Line key="p50" isAnimationActive={false} type="monotone" dataKey="sku_p50"
+                      stroke={focusColour} strokeWidth={2.2} dot={false}
+                      name={`${focusMeta.short} · p50`} />,
+              ] : FLAVOURS.map((f) => (
                 <Area key={f.key} isAnimationActive={false} type="monotone" dataKey={f.key}
                       stackId="flavour" stroke={f.colour} strokeWidth={1} fill={f.colour}
                       fillOpacity={0.72} name={f.label} />
@@ -194,10 +270,11 @@ export default function DemandDesk({
           </div>
         </Card>
       </Section>
+      </div>
 
       <Section
         title="What to move, and by when"
-        subtitle={`Every SKU at ${detail.store.name}. Blue is the stock actually on the shelf right now; green is the total demand the busiest hour ahead will actually take. Where the demand column is taller — and it turns red when it is — the shelf runs out before the peak.`}
+        subtitle={`Every SKU at ${detail.store.name}. Blue is the stock actually on the shelf right now; the second column is the total demand the busiest hour ahead will take — green when the shelf covers it, red when the shelf runs out before the peak.`}
         right={
           <button onClick={() => setShowMath((v) => !v)}
                   className="h-9 rounded-xl border border-ink-100 px-3 text-[12px] font-semibold text-ink-600 outline-none hover:border-ink-300">
@@ -206,6 +283,12 @@ export default function DemandDesk({
         }
       >
         <Card className="p-4">
+          <StockLegend shortLabel="Demand to the peak — shelf runs out"
+                       active={skuSeries} onToggle={toggle(setSkuSeries)} />
+          <p className="-mt-1 mb-2 text-[11px] text-ink-500">
+            Click a colour above to highlight it. Click a product to see its own 48 hours in the
+            chart above; click it again to go back.
+          </p>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={cover} barGap={2} margin={{ top: 22, right: 8, bottom: 4, left: -18 }}>
               <CartesianGrid stroke="#eee" vertical={false} />
@@ -214,15 +297,25 @@ export default function DemandDesk({
               <YAxis tick={AXIS} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={TIP} cursor={{ fill: '#f7f7f7' }}
                        formatter={(v: any, n: any) => [`${Number(v).toFixed(1)} units`, n]} />
-              <Legend verticalAlign="top" align="left" wrapperStyle={{ fontSize: 11, paddingBottom: 6 }} />
+              {/* Either column of a pair picks that SKU for the 48-hour chart;
+                  the rest dim so the selection reads without a second legend. */}
               <Bar isAnimationActive={false} dataKey="stock" name="Stock on the shelf now"
-                   fill={C_STOCK} radius={[4, 4, 0, 0]}>
+                   fill={C_STOCK} radius={[4, 4, 0, 0]} className="cursor-pointer"
+                   onClick={(d: any) => pickSku(d.sku_id)}>
+                {cover.map((c: any) => (
+                  <Cell key={c.sku_id} fill={C_STOCK}
+                        fillOpacity={(!focusSku || focusSku === c.sku_id ? 1 : 0.3)
+                                     * seriesOpacity(skuSeries, 'stock')} />
+                ))}
                 <LabelList dataKey="stock" position="top" style={{ fontSize: 10, fill: '#6b6b6b' }} />
               </Bar>
               <Bar isAnimationActive={false} dataKey="need" name="Total demand to the peak"
-                   fill={C_DEMAND} radius={[4, 4, 0, 0]}>
+                   fill={C_DEMAND} radius={[4, 4, 0, 0]} className="cursor-pointer"
+                   onClick={(d: any) => pickSku(d.sku_id)}>
                 {cover.map((c: any) => (
-                  <Cell key={c.sku_id} fill={c.short ? C_SHORT : C_DEMAND} />
+                  <Cell key={c.sku_id} fill={c.short ? C_SHORT : C_DEMAND}
+                        fillOpacity={(!focusSku || focusSku === c.sku_id ? 1 : 0.3)
+                                     * seriesOpacity(skuSeries, c.short ? 'short' : 'covered')} />
                 ))}
                 <LabelList dataKey="need" position="top" style={{ fontSize: 10, fill: '#6b6b6b' }} />
               </Bar>
@@ -290,9 +383,11 @@ export default function DemandDesk({
 
       <Section
           title="Across the network"
-          subtitle="The same two quantities, one pair of columns per store: blue is the stock actually on its shelf, green is the total demand its own peak will take. Click a column to load that store's 48 hours above."
+          subtitle="The same two quantities, one pair of columns per store: blue is the stock actually on its shelf, the second column is the total demand its own peak will take — green when the store covers every SKU, red when it is short on at least one. Click a column to load that store's 48 hours above."
         >
           <Card className="p-4">
+            <StockLegend shortLabel="Demand to the peak — store short on a SKU"
+                         active={netSeries} onToggle={toggle(setNetSeries)} />
             <ResponsiveContainer width="100%" height={320}>
               <BarChart data={netData} barGap={2} margin={{ top: 18, right: 8, bottom: 34, left: -18 }}>
                 <CartesianGrid stroke="#eee" vertical={false} />
@@ -305,13 +400,13 @@ export default function DemandDesk({
                            const d = p?.[0]?.payload
                            return d ? `${d.name} · ${d.city}, ${d.state} · ${d.lead} min away` : l
                          }} />
-                <Legend verticalAlign="top" align="left" wrapperStyle={{ fontSize: 11, paddingBottom: 6 }} />
                 <Bar isAnimationActive={false} dataKey="on_hand" name="Stock on the shelf now"
                      fill={C_STOCK} radius={[4, 4, 0, 0]} onClick={(d: any) => setStore(d.store_id)}
                      className="cursor-pointer">
                   {netData.map((d: any) => (
                     <Cell key={d.store_id} fill={C_STOCK}
-                          fillOpacity={d.store_id === store ? 1 : 0.55} />
+                          fillOpacity={(d.store_id === store ? 1 : 0.55)
+                                       * seriesOpacity(netSeries, 'stock')} />
                   ))}
                 </Bar>
                 <Bar isAnimationActive={false} dataKey="need" name="Total demand to the peak"
@@ -319,7 +414,8 @@ export default function DemandDesk({
                      className="cursor-pointer">
                   {netData.map((d: any) => (
                     <Cell key={d.store_id} fill={d.risk_skus > 0 ? C_SHORT : C_DEMAND}
-                          fillOpacity={d.store_id === store ? 1 : 0.55} />
+                          fillOpacity={(d.store_id === store ? 1 : 0.55)
+                                       * seriesOpacity(netSeries, d.risk_skus > 0 ? 'short' : 'covered')} />
                   ))}
                 </Bar>
               </BarChart>

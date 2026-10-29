@@ -192,6 +192,7 @@ def policy_eval() -> Dict:
 
     n = len(df)
     out = []
+    conv_rows = {}
     for name, table in policies.items():
         chosen = df["cluster"].map(table)
         match = (chosen == df["arm_assigned"])
@@ -199,7 +200,8 @@ def policy_eval() -> Dict:
         vals = w * df["decision_reward"]
         est = float(vals.mean())
         se = float(vals.std(ddof=1) / math.sqrt(n))
-        conv = float((w * df["converted"]).mean())
+        conv_rows[name] = w * df["converted"]
+        conv = float(conv_rows[name].mean())
         ess = float(w.sum() ** 2 / (w ** 2).sum()) if (w ** 2).sum() > 0 else 0.0
         mix = chosen.value_counts(normalize=True).round(4).to_dict()
         out.append({
@@ -212,6 +214,21 @@ def policy_eval() -> Dict:
             "effective_sample_size": int(ess),
             "arm_mix": mix,
         })
+    # Attach difference against every other policy, with its interval. Both
+    # estimates are scored on the same holdout rows, so the interval comes from
+    # the paired per-row difference - treating them as independent would
+    # overstate the noise and hide a lift that is really there.
+    for r in out:
+        diffs = {}
+        for other, oc in conv_rows.items():
+            if other == r["policy"]:
+                continue
+            dv = conv_rows[r["policy"]] - oc
+            d_est = float(dv.mean())
+            d_se = float(dv.std(ddof=1) / math.sqrt(n))
+            diffs[other] = [round(d_est * 100, 3), round((d_est - 1.96 * d_se) * 100, 3),
+                            round((d_est + 1.96 * d_se) * 100, 3)]
+        r["attach_diff_pp"] = diffs
     out.sort(key=lambda r: -r["value_per_decision"])
     return {
         "estimator": "inverse propensity scoring (IPS), propensity = 0.20 by design",

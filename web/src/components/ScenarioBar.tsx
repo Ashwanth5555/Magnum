@@ -10,7 +10,7 @@ const WEATHER_ICON: Record<string, any> = { hot: Sun, warm: Sun, cool: Thermomet
  *  demand desk all resolve against this snapshot, which is what stops the
  *  console from becoming five unrelated dashboards. */
 export default function ScenarioBar({
-  sel, setSel, ctx, options, onReset, profiles, customerId, setCustomerId,
+  sel, setSel, ctx, options, onReset, profiles, customerId, setCustomerId, showShopper = true,
 }: {
   sel: ContextSel
   setSel: (s: ContextSel) => void
@@ -20,6 +20,9 @@ export default function ScenarioBar({
   profiles: any[]
   customerId: string | null
   setCustomerId: (id: string | null) => void
+  /** Off on screens that aggregate every household, where a shopper picker
+   *  would be a control wired to nothing. */
+  showShopper?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const Icon = ctx ? WEATHER_ICON[ctx.weather] ?? Sun : Sun
@@ -64,6 +67,7 @@ export default function ScenarioBar({
             sits with the weather and the hour because every screen resolves
             against the same snapshot, and switching household changes the
             answer exactly the way switching the weather does. */}
+        {showShopper && (
         <label className="flex items-center gap-1.5 text-[13px] font-semibold text-ink-700">
           <User className="h-4 w-4 text-ink-500" />
           <select
@@ -79,6 +83,7 @@ export default function ScenarioBar({
             ))}
           </select>
         </label>
+        )}
 
         {ctx?.in_game_window && (
           <Badge tone="brand"><Trophy className="h-3 w-3" /> Game window</Badge>

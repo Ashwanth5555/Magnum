@@ -43,6 +43,14 @@ HORIZONS = [
 # claim about a different, worse policy.
 DEFAULT_RECOVERY = 0.35
 
+# The share of substituted Magnum orders that would have been *lost* without the
+# substitute. The generator has every shopper accept the swap, so counting all
+# of them as saved claims the whole lot - but a shopper facing a gap often picks
+# another flavour unprompted. Retail out-of-stock studies (Corsten & Gruen) put
+# the shoppers who leave or buy elsewhere at about four in ten, so that is the
+# default, and like recovery it is a control rather than a constant.
+DEFAULT_SUB_SAVE = 0.40
+
 # The policy the projection is measured against. Most retailers run something
 # close to `always_voucher20` - one campaign, one depth, everybody in the file -
 # so that is the comparison the page leads with. `do_nothing` is kept alongside
@@ -120,12 +128,71 @@ def _base() -> Dict:
     }
 
 
+@lru_cache(maxsize=1)
+def _windows() -> Dict[str, Dict]:
+    """The log counted over its real trailing windows.
+
+    Projecting one log-wide daily average across three horizons printed the same
+    rate on every bar and made each bar an exact multiple of the first, which hid
+    the season: shown-to-bought runs from 13% in December to 26% in August, and
+    the summer months carry more decisions. Each horizon is instead the last N
+    days of the log, ending on the last day it has, so the funnel, the decisions
+    the offer policy is applied to and the substitutions are counts, not
+    projections.
+    """
+    con = _con()
+    end, = con.execute("SELECT MAX(date(decided_at)) FROM offers").fetchone()
+    out = {}
+    for h in HORIZONS:
+        since = "-{} days".format(h["days"])
+        start, shown, conv, disc, unprompted, eligible = con.execute(
+            "SELECT date(?, ?, '+1 day'), "
+            "SUM(shown), "
+            "SUM(CASE WHEN shown = 1 AND converted = 1 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN shown = 1 AND converted = 1 AND discount_pct > 0 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN shown = 0 AND converted = 1 THEN 1 ELSE 0 END), "
+            "SUM(eligible) "
+            "FROM offers WHERE date(decided_at) > date(?, ?)",
+            (end, since, end, since)).fetchone()
+        subs, = con.execute(
+            "SELECT SUM(was_substituted) FROM orders WHERE date(ordered_at) > date(?, ?)",
+            (end, since)).fetchone()
+        out[h["key"]] = {"from": start, "to": end, "shown": float(shown or 0),
+                         "converted": float(conv or 0), "discounted": float(disc or 0),
+                         "unprompted": float(unprompted or 0),
+                         "decisions": float(eligible or 0), "substituted": float(subs or 0)}
+    con.close()
+    return out
+
+
+@lru_cache(maxsize=1)
+def _monthly() -> List[Dict]:
+    """The funnel counted per calendar month across the whole log.
+
+    The trailing windows all end in summer, so the longer ones read *lower* -
+    they take in the cooler spring. Month by month is the view that shows what
+    actually moves the rate: shown-to-bought climbs with the weather, from
+    December's low to August's high.
+    """
+    con = _con()
+    rows = con.execute(
+        "SELECT strftime('%Y-%m', decided_at) AS m, "
+        "SUM(shown), "
+        "SUM(CASE WHEN shown = 1 AND converted = 1 THEN 1 ELSE 0 END), "
+        "SUM(CASE WHEN shown = 1 AND converted = 1 AND discount_pct > 0 THEN 1 ELSE 0 END) "
+        "FROM offers GROUP BY m ORDER BY m").fetchall()
+    con.close()
+    return [{"month": m, "shown": float(s or 0), "converted": float(c or 0),
+             "discounted": float(dc or 0)} for m, s, c, dc in rows]
+
+
 def _policy_rows() -> Dict[str, Dict]:
     return {p["policy"]: p for p in analysis.policy_eval()["policies"]}
 
 
-def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
-    """Project the measured per-decision and per-shelf-hour rates forward."""
+def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0,
+            sub_save: float = DEFAULT_SUB_SAVE) -> Dict:
+    """Apply the measured per-decision rates to the real windows of the log."""
     b = _base()
     pol_rows = _policy_rows()
     live = pol_rows.get("eic_greedy_v1")
@@ -134,6 +201,7 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
 
     recovery = max(0.0, min(1.0, float(recovery)))
     scale = max(0.1, min(200.0, float(scale)))
+    sub_save = max(0.0, min(1.0, float(sub_save)))
 
     comparisons = []
     for key, phrase in BASELINES.items():
@@ -145,6 +213,9 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
         # band, not the narrowest presentable one.
         lo = live["ci_low"] - base["ci_high"]
         hi = live["ci_high"] - base["ci_low"]
+        # The attach difference is scored on the same holdout rows for both
+        # policies, so its interval is the paired one from policy_eval.
+        _, a_lo, a_hi = live.get("attach_diff_pp", {}).get(key, [None, None, None])
         comparisons.append({
             "key": key, "against": phrase,
             "value_per_decision": round(delta, 4),
@@ -153,12 +224,17 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
             "live_value": live["value_per_decision"],
             "baseline_value": base["value_per_decision"],
             "attach_delta_pp": round((live["attach_rate"] - base["attach_rate"]) * 100, 2),
+            "attach_ci_low_pp": a_lo, "attach_ci_high_pp": a_hi,
         })
 
+    windows = _windows()
     horizons = []
     for h in HORIZONS:
         d = float(h["days"])
-        decisions = b["decisions_per_day"] * d * scale
+        w = windows[h["key"]]
+        # The decisions the policy would actually have faced in this window,
+        # counted - summer windows carry more of them than a flat average says.
+        decisions = w["decisions"] * scale
         shelf_hours = b["shelf_hours_per_day"] * d * scale
         stockout_hours = b["stockout_hours_per_day"] * d * scale
         waste_units = b["waste_units_per_day"] * d * scale
@@ -172,6 +248,10 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
                 "margin_high": round(c["ci_high"] * decisions, 0),
                 "significant": c["significant"],
                 "extra_magnum_orders": round(c["attach_delta_pp"] / 100.0 * decisions, 0),
+                "extra_magnum_orders_low": (round(c["attach_ci_low_pp"] / 100.0 * decisions, 0)
+                                            if c["attach_ci_low_pp"] is not None else None),
+                "extra_magnum_orders_high": (round(c["attach_ci_high_pp"] / 100.0 * decisions, 0)
+                                             if c["attach_ci_high_pp"] is not None else None),
             })
 
         # Availability. Three measured quantities, one stated assumption.
@@ -205,18 +285,22 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
                 "bars_saved": round(units_recovered + waste_avoided, 0),
                 "stockout_episodes": round(episodes, 0),
                 "rebalances": round(rebalances, 0),
-                "substituted_orders": round(b["substituted_per_day"] * d * scale, 0),
+                # Every order that got a substitute, counted in the window, and
+                # the share of them that would otherwise have been lost.
+                "substituted_orders": round(w["substituted"] * scale, 0),
+                "substitutions_saved": round(w["substituted"] * sub_save * scale, 0),
             },
-            # All stores combined. Sums to what the log did, not to a target.
+            # All stores combined, counted over the real last N days of the log.
+            # Sums to what the log did in that window, not to a target.
             "funnel": {
-                "shown": round(b["shown_per_day"] * d * scale, 0),
-                "converted": round(b["converted_per_day"] * d * scale, 0),
-                "discounted": round(b["converted_discounted_per_day"] * d * scale, 0),
-                "full_price": round(b["converted_full_price_per_day"] * d * scale, 0),
-                "unprompted": round(b["unprompted_per_day"] * d * scale, 0),
-                "conversion_rate": round(b["converted_per_day"] / b["shown_per_day"], 4),
-                "discount_share": round(b["converted_discounted_per_day"]
-                                        / b["converted_per_day"], 4),
+                "from": w["from"], "to": w["to"],
+                "shown": round(w["shown"] * scale, 0),
+                "converted": round(w["converted"] * scale, 0),
+                "discounted": round(w["discounted"] * scale, 0),
+                "full_price": round((w["converted"] - w["discounted"]) * scale, 0),
+                "unprompted": round(w["unprompted"] * scale, 0),
+                "conversion_rate": round(w["converted"] / w["shown"], 4) if w["shown"] else 0.0,
+                "discount_share": round(w["discounted"] / w["converted"], 4) if w["converted"] else 0.0,
             },
             "total_margin": round((headline["margin"] if headline else 0.0) + availability_margin, 0),
             "total_margin_low": round((headline["margin_low"] if headline else 0.0)
@@ -225,11 +309,28 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
                                        + availability_margin * 1.5, 0),
         })
 
+    # Month by month, all stores combined. Counts scale with the network; the
+    # rate is a share and does not.
+    monthly = [{
+        "month": r["month"],
+        "shown": round(r["shown"] * scale, 0),
+        "converted": round(r["converted"] * scale, 0),
+        "discounted": round(r["discounted"] * scale, 0),
+        "full_price": round((r["converted"] - r["discounted"]) * scale, 0),
+        "conversion_rate": round(r["converted"] / r["shown"], 4) if r["shown"] else 0.0,
+    } for r in _monthly()]
+
     return {
         "horizons": horizons,
+        "monthly": monthly,
         "comparisons": comparisons,
         "assumptions": {
             "recovery_share": recovery,
+            "substitute_save_share": sub_save,
+            "substitute_note": ("Share of substituted orders that would have been lost "
+                                "without the substitute. The simulation has every shopper "
+                                "accept the swap; in practice many would pick another "
+                                "flavour unprompted, so only this share counts as saved."),
             "recovery_note": ("The one assumption on this page: the share of measured "
                               "stockout hours and waste that better forecasting actually "
                               "recovers. Everything else is read off the log. Move it and "
@@ -268,8 +369,9 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
             "Stock loss is costed at the average demand on a shelf-hour. Stockouts "
             "cluster in busy hours, so this understates the loss rather than "
             "flattering it.",
-            "The funnel is counted, not modelled: shown, bought, and whether the "
-            "basket that bought needed a coupon to do it. Purchases made with no "
+            "The funnel is counted, not modelled, over the real last 1, 3 and 6 "
+            "months of the log: shown, bought, and whether the basket that bought "
+            "needed a coupon to do it. Purchases made with no "
             "recommendation on screen are reported separately and are never "
             "counted as something the system won.",
             "A rebalance is one contiguous run of stockout hours on one shelf - "
@@ -281,3 +383,5 @@ def compute(recovery: float = DEFAULT_RECOVERY, scale: float = 1.0) -> Dict:
 
 def clear_cache():
     _base.cache_clear()
+    _windows.cache_clear()
+    _monthly.cache_clear()

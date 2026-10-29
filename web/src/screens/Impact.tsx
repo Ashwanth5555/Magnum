@@ -43,18 +43,22 @@ function Chart({ title, note, children }: {
 
 export default function Impact() {
   const [recovery, setRecovery] = useState(0.35)
-  const [scale, setScale] = useState(1)
+  // Opens at x10: the simulated network is ten stores, a regional rollout is
+  // nearer a hundred. Rates are unchanged by the slider; only volumes scale, and
+  // the label under it says what the multiplier stands for.
+  const [scale, setScale] = useState(10)
+  const [subSave, setSubSave] = useState(0.4)
   const [d, setD] = useState<any>(null)
   const [error, setError] = useState<unknown>(null)
 
   useEffect(() => {
     let live = true
     setError(null)
-    get<any>(`/api/impact?recovery=${recovery}&scale=${scale}`)
+    get<any>(`/api/impact?recovery=${recovery}&scale=${scale}&sub_save=${subSave}`)
       .then((r) => live && setD(r))
       .catch((e) => live && setError(e))
     return () => { live = false }
-  }, [recovery, scale])
+  }, [recovery, scale, subSave])
 
   if (error) return <ErrorNote error={error} />
   if (!d) return <Spinner label="Adding it up" />
@@ -75,26 +79,48 @@ export default function Impact() {
     err: [h.total_margin - h.total_margin_low, h.total_margin_high - h.total_margin],
   }))
 
-  const orders = d.horizons.map((h: any) => ({
-    label: h.label,
-    extra: row(h, 'do_nothing').extra_magnum_orders,
-    recovered: h.availability.substituted_orders,
-  }))
+  // Real windows of the log, so the axis says "last". The targeting bar carries
+  // its 95% whisker: the lift is measured on a holdout, and the low end is the
+  // number to quote if anyone asks for the cautious case.
+  const orders = d.horizons.map((h: any) => {
+    const r = row(h, 'do_nothing')
+    return {
+      label: h.days <= 31 ? 'Last month' : `Last ${h.label}`,
+      extra: r.extra_magnum_orders,
+      lo: r.extra_magnum_orders_low,
+      hi: r.extra_magnum_orders_high,
+      err: [r.extra_magnum_orders - r.extra_magnum_orders_low,
+            r.extra_magnum_orders_high - r.extra_magnum_orders],
+      recovered: h.availability.substitutions_saved,
+      substituted: h.availability.substituted_orders,
+    }
+  })
 
-  // The funnel, all ten stores combined. "Shown" towers over "bought", which is
-  // the point - the second bar is split by whether the basket needed a coupon,
-  // so the reader can see how much of the conversion was bought with margin.
-  const funnel = d.horizons.map((h: any) => ({
-    label: h.label,
-    shown: h.funnel.shown,
-    discounted: h.funnel.discounted,
-    full_price: h.funnel.full_price,
-    converted: h.funnel.converted,
-    // The rest of the bar. Conversion is a share of what was shown, so it has to
-    // live *inside* that bar - a second bar beside it reads as a second quantity.
-    not_bought: h.funnel.shown - h.funnel.converted,
-    rate: h.funnel.conversion_rate,
-  }))
+  // The funnel by season, all stores combined: the log's nine months taken three
+  // at a time. Trailing 1/3/6-month windows all end in summer, so the longer
+  // ones read lower; consecutive quarters are what show the rate actually
+  // moving - it climbs with the weather, winter to spring to summer.
+  const SEASON = ['Winter', 'Spring', 'Summer', 'Autumn']
+  const mon = (m: string) => new Date(`${m}-01T00:00:00Z`)
+    .toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })
+  const funnel = Array.from({ length: Math.floor(d.monthly.length / 3) }, (_, q) => {
+    const ms = d.monthly.slice(q * 3, q * 3 + 3)
+    const sum = (k: string) => ms.reduce((a: number, m: any) => a + m[k], 0)
+    const shown = sum('shown'), converted = sum('converted')
+    return {
+      label: `${mon(ms[0].month)}–${mon(ms[2].month)}`,
+      season: SEASON[q] ?? '',
+      shown, converted,
+      discounted: sum('discounted'),
+      full_price: sum('full_price'),
+      // The rest of the bar. Conversion is a share of what was shown, so it has
+      // to live *inside* that bar - a second bar beside it reads as a second quantity.
+      not_bought: shown - converted,
+      rate: shown ? converted / shown : 0,
+    }
+  })
+  const firstQ = funnel[0]
+  const lastQ = funnel[funnel.length - 1]
 
   // Availability in bars, not hours: the units an empty shelf would have refused
   // plus the units the bin would have taken. Money sits on top of the stack, so
@@ -120,7 +146,8 @@ export default function Impact() {
             <div className="text-[13px] font-bold text-ink-900">Business impact</div>
             <div className="text-[11px] text-ink-500">
               {count(d.measured.decisions_per_day)} decisions a day, measured over{' '}
-              {count(d.measured.days_of_log)} days of orders across {d.measured.stores} stores.
+              {count(d.measured.days_of_log)} days of orders across {d.measured.stores} stores
+              {scale !== 1 && <> — shown scaled to a {count(scale * d.measured.stores)}-store network</>}.
             </div>
           </div>
         </div>
@@ -130,14 +157,21 @@ export default function Impact() {
             <input type="range" min={0} max={1} step={0.05} value={recovery}
                    onChange={(e) => setRecovery(Number(e.target.value))}
                    className="mt-1 block w-40 accent-brand-500" />
-            <span className="text-ink-400">the one assumption on this page</span>
+            <span className="text-ink-400">assumption — stock loss recovered</span>
           </label>
           <label className="text-[11px] text-ink-600">
-            <span className="font-semibold">Network scale ×{scale}</span>
+            <span className="font-semibold">Substitutes that save a sale {Math.round(subSave * 100)}%</span>
+            <input type="range" min={0} max={1} step={0.05} value={subSave}
+                   onChange={(e) => setSubSave(Number(e.target.value))}
+                   className="mt-1 block w-40 accent-brand-500" />
+            <span className="text-ink-400">assumption — the rest would have swapped anyway</span>
+          </label>
+          <label className="text-[11px] text-ink-600">
+            <span className="font-semibold">Network scale ×{scale} · {count(scale * d.measured.stores)} stores</span>
             <input type="range" min={1} max={50} step={1} value={scale}
                    onChange={(e) => setScale(Number(e.target.value))}
                    className="mt-1 block w-40 accent-brand-500" />
-            <span className="text-ink-400">×1 is the simulated 10-store network</span>
+            <span className="text-ink-400">×1 is the simulated {d.measured.stores}-store network</span>
           </label>
         </div>
       </Card>
@@ -145,12 +179,21 @@ export default function Impact() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Chart
           title="Shown, and what came back"
-          note={`Every store combined. The whole bar is what we showed; the solid part at the bottom is what was bought out of it. Six months: ${count(funnel[2].shown)} shown, ${count(funnel[2].converted)} bought — ${(funnel[2].rate * 100).toFixed(1)}%, split by whether the basket needed a coupon to close.`}
+          note={`Every store combined, by season — three months per bar. The whole bar is what we showed; the solid part at the bottom is what was bought out of it, split by whether the basket needed a coupon to close. The share bought climbs with the weather: ${(firstQ.rate * 100).toFixed(1)}% in ${firstQ.season.toLowerCase()} to ${(lastQ.rate * 100).toFixed(1)}% in ${lastQ.season.toLowerCase()}.`}
         >
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={funnel} margin={{ top: 34, right: 8, bottom: 0, left: -6 }}>
               <CartesianGrid stroke="#eee" vertical={false} />
-              <XAxis dataKey="label" tick={AXIS} tickLine={false} axisLine={false} />
+              <XAxis dataKey="label" tickLine={false} axisLine={false} interval={0} height={34}
+                     tick={(p: any) => {
+                       const f = funnel[p.index]
+                       return (
+                         <text x={p.x} y={p.y + 10} textAnchor="middle" style={AXIS}>
+                           <tspan x={p.x} style={{ fontWeight: 700, fill: '#2f2f2f' }}>{f?.season}</tspan>
+                           <tspan x={p.x} dy={13}>{f?.label}</tspan>
+                         </text>
+                       )
+                     }} />
               <YAxis tick={AXIS} tickLine={false} axisLine={false} tickFormatter={compact} />
               <Tooltip contentStyle={TIP} formatter={(v: any, n: any) => [count(Number(v)), n]} />
               <Legend wrapperStyle={{ fontSize: 11 }}
@@ -164,11 +207,8 @@ export default function Impact() {
                    name="Shown, not bought" fill="#e4f4ec" stroke="#b8dfc9" strokeWidth={1}
                    radius={[4, 4, 0, 0]} maxBarSize={96}>
                 {/* Both numbers sit above the bar, each with the word that says
-                    what it is. Earlier revisions put the bought figure beside the
-                    band it measures, which reads well until the network-scale
-                    slider is moved: the bars get taller, the label stays at the
-                    band's height, and it lands on top of the next bar. Above the
-                    bar it is centred on its own category and cannot collide. */}
+                    what it is, centred on its own category so they cannot
+                    collide when the network-scale slider makes the bars taller. */}
                 <LabelList dataKey="shown" content={(p: any) => {
                   const f = funnel[p.index]
                   const cx = p.x + p.width / 2
@@ -180,7 +220,7 @@ export default function Impact() {
                       </text>
                       <text x={cx} y={p.y - 7} textAnchor="middle"
                             style={{ fontSize: 11, fontWeight: 700, fill: '#0b0b0b' }}>
-                        {compact(f.converted)} bought · {Math.round(f.rate * 100)}%
+                        {compact(f.converted)} bought · {(f.rate * 100).toFixed(1)}%
                       </text>
                     </g>
                   )
@@ -189,7 +229,7 @@ export default function Impact() {
             </BarChart>
           </ResponsiveContainer>
           <p className="mt-2 text-[11px] leading-snug text-ink-500">
-            A further {count(d.horizons[2].funnel.unprompted)} baskets over six months buy
+            A further {count(d.horizons[2].funnel.unprompted)} baskets over the last six months bought
             Magnum with nothing on screen at all. Those are not counted here — the system
             does not get to claim them.
           </p>
@@ -197,25 +237,44 @@ export default function Impact() {
 
         <Chart
           title="Extra Magnum orders"
-          note="Orders that would not have happened without the system — the ones it wins by asking, plus the ones it saves by offering a substitute when the first choice is gone."
+          note={`Orders that would not have happened without the system, over the real last 1, 3 and 6 months. Targeting lifts Magnum buying by ${d.comparisons.find((c: any) => c.key === 'do_nothing')?.attach_delta_pp.toFixed(1)} points against doing nothing; the whisker is its 95% range. Of the ${count(orders[2].substituted)} orders over six months that got a substitute, only ${Math.round(subSave * 100)}% are counted as saved — the rest would have picked another flavour anyway.`}
         >
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={orders} margin={{ top: 18, right: 8, bottom: 0, left: -6 }}>
+            <BarChart data={orders} margin={{ top: 22, right: 8, bottom: 0, left: -6 }}>
               <CartesianGrid stroke="#eee" vertical={false} />
               <XAxis dataKey="label" tick={AXIS} tickLine={false} axisLine={false} />
               <YAxis tick={AXIS} tickLine={false} axisLine={false} tickFormatter={compact} />
-              <Tooltip contentStyle={TIP} formatter={(v: any, n: any) => [count(Number(v)), n]} />
+              <Tooltip contentStyle={TIP} formatter={(v: any, n: any, p: any) => (
+                n === 'Won by better targeting'
+                  ? [`${count(Number(v))} (range ${count(p.payload.lo)}–${count(p.payload.hi)})`, n]
+                  : [`${count(Number(v))} of ${count(p.payload.substituted)} substituted`, n]
+              )} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar isAnimationActive={false} dataKey="extra" name="Won by better targeting" fill="#06c167" radius={[4, 4, 0, 0]}>
-                <LabelList dataKey="extra" position="top" formatter={count}
-                           style={{ fontSize: 11, fontWeight: 700, fill: '#0b0b0b' }} />
+                <ErrorBar dataKey="err" width={6} strokeWidth={1.2} stroke="#2f2f2f" />
+                {/* The whisker runs through the middle of the bar, so the value
+                    sits above the whisker's top end rather than on the bar. */}
+                <LabelList dataKey="extra" content={(p: any) => {
+                  const o = orders[p.index]
+                  if (!o || !o.extra) return null
+                  const top = p.y - (o.hi - o.extra) * (p.height / o.extra)
+                  return (
+                    <text x={p.x + p.width / 2} y={top - 5} textAnchor="middle"
+                          style={{ fontSize: 11, fontWeight: 700, fill: '#0b0b0b' }}>
+                      {count(o.extra)}
+                    </text>
+                  )
+                }} />
               </Bar>
               <Bar isAnimationActive={false} dataKey="recovered" name="Saved by substitution" fill="#93e5bc" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
           <p className="mt-2 text-[11px] leading-snug text-ink-500">
-            Measured against doing no targeting at all. This is the same lever as the
-            margin chart below, counted in orders instead of dollars — never added to it.
+            Measured against doing no targeting at all, on synthetic data where the lift was
+            built into the simulation — a pilot is what would confirm it with real shoppers.
+            Against a blanket 20% campaign it gets roughly {count(Math.abs(row(d.horizons[2], 'always_voucher20').extra_magnum_orders))} fewer
+            orders over six months, a gap inside the noise — it wins on margin, not volume. This is the same lever as
+            the margin chart below, counted in orders instead of dollars — never added to it.
           </p>
         </Chart>
 
